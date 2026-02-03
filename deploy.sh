@@ -48,7 +48,8 @@ echo "[3/5] 配置环境变量..."
 if [ ! -f ".env" ]; then
     cp .env.example .env
     TOKEN=$(generate_token)
-    sed -i "s/your-secure-token-here/$TOKEN/" .env
+    # 使用 # 作为分隔符，避免 token 中 / 导致的问题
+    sed -i "s#your-secure-token-here#$TOKEN#" .env
     echo -e "${GREEN}已生成 Gateway Token${NC}"
 fi
 
