@@ -1,145 +1,196 @@
-# OpenClaw on FNOS Deployment Guide
+# OpenClaw on FNOS 部署指南
 
-This guide covers deploying OpenClaw on FNOS (Freenas/NAS operating system with Docker management).
+## 快速部署命令（FNOS 上执行）
 
-## FNOS Docker Management Features
+### 第一步：克隆代码
 
-FNOS provides a comprehensive Docker management interface with the following capabilities:
-
-### 1. Docker Container Management
-- **Container Lifecycle**: Start, stop, restart, pause, unpause containers
-- **Resource Limits**: CPU, memory, disk I/O limits per container
-- **Network Management**: Built-in bridge networks, port mappings
-- **Volume Management**: Persistent storage with host path mappings
-
-### 2. Docker Compose Support
-FNOS supports Docker Compose for multi-container applications:
-
-```yaml
-version: '3.8'  # Note: FNOS may warn about obsolete version attribute
-services:
-  openclaw-gateway:
-    image: openclaw:local
-    container_name: openclaw-gateway
-    restart: unless-stopped
-    ports:
-      - "18789:18789"
-      - "18790:18790"
-    volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-    environment:
-      - HOME=/home/node
-      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
-    init: true
-```
-
-### 3. Important FNOS Considerations
-
-#### A. Version Attribute Warning
-FNOS Docker may show warning:
-```
-WARN: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion
-```
-**Solution**: Remove the `version` attribute from docker-compose.yml
-
-#### B. Dockerfile COPY with --exclude
-Standard Docker COPY instruction doesn't support `--exclude` flag. Instead use:
-
-```dockerfile
-# Wrong (causes error):
-COPY --exclude='*test*' --exclude='*.test.*' --exclude='__pycache__/' .
-
-# Correct approaches:
-# Option 1: Use .dockerignore
-# Option 2: Multi-stage COPY
-COPY . .
-RUN find /app -name "*test*" -type f -delete && \
-    find /app -path "*/__pycache__/*" -delete
-
-# Option 3: Copy specific directories
-COPY package.json pnpm-lock.yaml ./
-COPY ui/package.json ./ui/
-COPY patches ./patches
-COPY scripts ./scripts
-```
-
-#### C. Environment Variables
-FNOS manages environment variables through its UI. Set these before deployment:
-- `OPENCLAW_GATEWAY_TOKEN`: Gateway authentication token
-- `CLAUDE_AI_SESSION_KEY`: Claude AI session (optional)
-- `CLAUDE_WEB_SESSION_KEY`: Claude web session (optional)
-- `CLAUDE_WEB_COOKIE`: Claude web cookie (optional)
-
-### 4. FNOS-Specific Deployment Steps
-
-#### Step 1: Prepare Local Build
 ```bash
-# Build the image locally
+# 创建工作目录
+mkdir -p ~/openclaw
+cd ~/openclaw
+
+# 克隆代码
+git clone https://github.com/snrzz/clawStdy.git .
+```
+
+### 第二步：配置环境变量
+
+```bash
+# 复制环境变量模板
+cp .env.example .env
+
+# 生成安全的 gateway token
+OPENCLAW_GATEWAY_TOKEN=$(openssl rand -base64 32)
+echo "OPENCLAW_GATEWAY_TOKEN=$OPENCLAW_GATEWAY_TOKEN" >> .env
+
+# 编辑配置文件（可选）
+# nano .env
+```
+
+### 第三步：构建 Docker 镜像
+
+> **注意**：FNOS 上直接构建可能较慢，建议在本地构建后导入
+
+#### 方式 A：本地构建后导入（推荐）
+
+```bash
+# 在本地机器上
+cd clawStdy
 docker build -t openclaw:local .
-
-# Or use the build script
-chmod +x docker-setup.sh
-./docker-setup.sh build
-```
-
-#### Step 2: Export/Import (if needed)
-If building directly on FNOS isn't feasible:
-```bash
-# Save image
 docker save openclaw:local > openclaw-local.tar
 
-# Transfer to FNOS and load
+# 传输到 FNOS
+scp openclaw-local.tar user@fnos-ip:/path/to/openclaw/
+
+# 在 FNOS 上导入
 docker load < openclaw-local.tar
 ```
 
-#### Step 3: FNOS Docker Configuration
+#### 方式 B：直接在 FNOS 构建
 
-1. **Create Container**:
-   - Navigate to FNOS Docker > Containers
-   - Add Container
-   - Configure Image: `openclaw:local`
-   - Set Network: Bridge
-   - Port Mapping: 18789, 18790
-   - Volume Mapping: Config and workspace directories
-
-2. **Environment Variables**:
-   - Add all required environment variables through FNOS UI
-
-3. **Restart Policy**: Set to "Unless stopped"
-
-### 5. Troubleshooting Common Issues
-
-#### Issue: COPY requires at least two arguments
-**Error**:
+```bash
+cd ~/openclaw
+docker build -t openclaw:local .
 ```
-Dockerfile parse error on line 19: COPY requires at least two arguments, but only one was provided
+
+### 第四步：创建必要目录
+
+```bash
+# 创建配置和 workspace 目录
+mkdir -p ~/.config/openclaw
+mkdir -p ~/openclaw-workspace
+
+# 确保权限正确
+chmod -R 755 ~/.config/openclaw
+chmod -R 755 ~/openclaw-workspace
 ```
-**Cause**: Using `--exclude` flag with COPY (not supported by Docker)
-**Fix**: See Section 2B above
 
-#### Issue: Version attribute warning
-**Error**: `WARN: the attribute 'version' is obsolete`
-**Fix**: Remove `version` from docker-compose.yml
+### 第五步：启动服务
 
-#### Issue: Permission denied on mounted volumes
-**Solution**: Ensure FNOS dataset permissions allow access
+```bash
+cd ~/openclaw
 
-### 6. Security Considerations
+# 停止旧容器（如果存在）
+docker compose down 2>/dev/null
 
-1. **Non-root User**: OpenClaw Dockerfile runs as non-root `node` user
-2. **Init Process**: Uses `init: true` for proper signal handling
-3. **Token Security**: Store tokens securely in FNOS environment variables
+# 启动服务
+docker compose up -d
 
-## Quick Reference
+# 检查状态
+docker compose ps
 
-| FNOS Version | Docker Support | Notes |
-|--------------|----------------|-------|
-| FN 11.3+ | Docker CE | Full support |
-| TrueNAS 12.0+ | Docker | Via plugins jail |
+# 查看日志
+docker compose logs -f
+```
 
-## Additional Resources
+### 第六步：访问 OpenClaw
 
-- [OpenClaw Documentation](docs/)
-- [FNOS Docker Guide](https://www.truenas.com/docs/)
-- [Docker Compose Reference](https://docs.docker.com/compose/)
+- **Gateway**: http://your-fnos-ip:18789
+- **Web UI**: http://your-fnos-ip:18789/_/ (通过浏览器)
+
+## 端口说明
+
+| 端口 | 服务 | 说明 |
+|------|------|------|
+| 18789 | Gateway | 主服务端口 |
+| 18790 | Bridge | 桥接端口（内部使用）|
+
+## 常用管理命令
+
+```bash
+# 查看状态
+docker compose ps
+
+# 查看日志
+docker compose logs -f
+docker compose logs -f openclaw-gateway
+
+# 重启服务
+docker compose restart
+
+# 停止服务
+docker compose down
+
+# 更新并重启
+git pull
+docker compose down
+docker compose build
+docker compose up -d
+```
+
+## 故障排除
+
+### 问题 1：权限错误
+
+```bash
+# 检查目录权限
+ls -la ~/.config/openclaw
+
+# 修复权限
+sudo chown -R 1000:1000 ~/.config/openclaw
+sudo chown -R 1000:1000 ~/openclaw-workspace
+```
+
+### 问题 2：端口被占用
+
+```bash
+# 检查端口占用
+ss -tlnp | grep 18789
+
+# 修改端口（编辑 .env）
+echo "OPENCLAW_GATEWAY_PORT=18790" >> .env
+```
+
+### 问题 3：Token 无效
+
+```bash
+# 重新生成 token
+OPENCLAW_GATEWAY_TOKEN=$(openssl rand -base64 32)
+sed -i "s/OPENCLAW_GATEWAY_TOKEN=.*/OPENCLAW_GATEWAY_TOKEN=$OPENCLAW_GATEWAY_TOKEN/" .env
+
+# 重启服务
+docker compose restart
+```
+
+## 环境变量说明
+
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| OPENCLAW_GATEWAY_TOKEN | 是 | Gateway 认证 token |
+| OPENCLAW_GATEWAY_PORT | 否 | Gateway 端口，默认 18789 |
+| OPENCLAW_GATEWAY_BIND | 否 | 绑定地址，lan/0.0.0.0/localhost |
+| OPENCLAW_CONFIG_DIR | 否 | 配置目录 |
+| OPENCLAW_WORKSPACE_DIR | 否 | 工作空间目录 |
+
+## Docker Compose 文件说明
+
+```yaml
+services:
+  openclaw-gateway:
+    image: openclaw:local          # 本地构建的镜像
+    container_name: openclaw-gateway
+    restart: unless-stopped        # 自动重启
+    init: true                     # 使用 tini 处理信号
+    ports:
+      - "18789:18789"              # Gateway 端口
+      - "18790:18790"              # Bridge 端口
+    volumes:
+      - ~/.config/openclaw:/home/node/.openclaw  # 配置
+      - ~/openclaw-workspace:/home/node/.openclaw/workspace  # 工作区
+    environment:
+      - OPENCLAW_GATEWAY_TOKEN=xxx  # 认证 token
+
+  openclaw-cli:
+    image: openclaw:local
+    container_name: openclaw-cli
+    stdin_open: true              # 交互式终端
+    tty: true
+    entrypoint: ["node", "dist/index.js"]  # CLI 模式
+```
+
+## 安全性建议
+
+1. **使用强 Token**：`openssl rand -base64 32`
+2. **限制端口访问**：使用 FNOS 防火墙
+3. **定期更新**：保持代码和依赖最新
+4. **备份配置**：定期备份 ~/.config/openclaw
